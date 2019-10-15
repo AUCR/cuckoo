@@ -1,5 +1,5 @@
 # Copyright (C) 2012-2013 Claudio Guarnieri.
-# Copyright (C) 2014-2018 Cuckoo Foundation.
+# Copyright (C) 2014-2017 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -13,11 +13,18 @@ import logging
 import os
 import random
 
+try:
+    logging.getLogger("weasyprint").setLevel(logging.ERROR)
+
+    import weasyprint
+    HAVE_WEASYPRINT = True
+except ImportError:
+    HAVE_WEASYPRINT = False
+
 from cuckoo.common.abstracts import Report
 from cuckoo.common.exceptions import CuckooReportError
 from cuckoo.misc import cwd
 
-logging.getLogger("weasyprint").setLevel(logging.ERROR)
 
 class SingleFile(Report):
     """Stores report in a single-file HTML and/or PDF format."""
@@ -84,12 +91,14 @@ class SingleFile(Report):
 
         if self.options.get("html"):
             report_path = os.path.join(self.reports_path, "report.html")
-            codecs.open(report_path, "wb", encoding="utf-8").write(report)
+            try:
+                report_data = report
+            except:
+                report_data = report.encode('utf-8', 'replace')
+            codecs.open(report_path, "wb").write(report_data)
 
         if self.options.get("pdf"):
-            try:
-                import weasyprint
-            except ImportError:
+            if not HAVE_WEASYPRINT:
                 raise CuckooReportError(
                     "The weasyprint library hasn't been installed on your "
                     "Operating System and as such we can't generate a PDF "
@@ -99,7 +108,11 @@ class SingleFile(Report):
                 )
 
             report_path = os.path.join(self.reports_path, "report.pdf")
-            f = weasyprint.HTML(io.BytesIO(report.encode("utf8")))
+            try:
+                f = weasyprint.HTML(io.BytesIO(report.encode("utf8")))
+            except:
+                encoded_report = report.encode("utf-8")
+                f = weasyprint.HTML(io.BytesIO(encoded_report))
             f.write_pdf(report_path)
 
     def generate_jinja2_template(self, results):

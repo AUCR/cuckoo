@@ -1,62 +1,22 @@
-# Copyright (C) 2016-2019 Cuckoo Foundation.
+# Copyright (C) 2016-2017 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
 from __future__ import absolute_import
 import udatetime
 import elasticsearch.helpers
-import json
 import logging
-import os
-import ujson
+
 
 from cuckoo.common.abstracts import Report
 from cuckoo.common.elastic import elastic
 from cuckoo.common.exceptions import CuckooReportError, CuckooOperationalError
-from cuckoo.misc import cwd
+from dataparserlib.dictionary import flatten_dictionary
 
 logging.getLogger("elasticsearch").setLevel(logging.WARNING)
 logging.getLogger("elasticsearch.trace").setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
-
-
-def flatten_dict(test):
-    meta = {}
-    meta["test"] = {}
-    for item in test:
-        if type(test[item]) is dict:
-            for values in test[item]:
-                if type(test[item][values]) is dict:
-                    for second_values in test[item][values]:
-                        if type(test[item][values][second_values]) is dict:
-                            for third_values in test[item][values][second_values]:
-                                if type(test[item][values][second_values][third_values]) is not list or dict or None:
-                                    print(type(test[item][values][second_values][third_values]))
-                                    debug_test = test[item][values][second_values][third_values]
-                                    if debug_test:
-                                        meta["test"][str(item + "." + values + "." + second_values + "." + third_values)] = \
-                                                str(test[item][values][second_values][third_values])
-                        elif type(test[item][values][second_values]) is not list or None:
-                            none_test = str(test[item][values][second_values])
-                            if none_test:
-                                meta["test"][str(item + "." + values + "." + second_values)] = str(test[item][values][second_values])
-                elif type(test[item][values]) is not list or None:
-                    values_test = test[item][values]
-                    if values_test and str(values_test) != "none":
-                        meta["test"][str(item + "." + values)] = str(test[item][values])
-        elif type(test[item]) is list:
-            for list_items in test[item]:
-                test_dict = list_items
-                if type(test_dict) is str:
-                    meta["test"][item] = test_dict
-                else:
-                    meta[item] = test[item]
-        elif type(test[item]) is not list or None:
-            test_item = test[item]
-            if test_item and str(test_item) != "none":
-                meta["test"][item] = test[item]
-    return meta
 
 
 class ElasticSearch(Report):
@@ -85,36 +45,6 @@ class ElasticSearch(Report):
             )
 
         # check to see if the template exists apply it if it does not
-        if not elastic.client.indices.exists_template(cls.template_name):
-            if not cls.apply_template():
-                raise CuckooReportError("Cannot apply Elasticsearch template")
-
-    @classmethod
-    def apply_template(cls):
-        template_path = cwd("elasticsearch", "template.json")
-        if not os.path.exists(template_path):
-            return False
-
-        try:
-            template = json.loads(open(template_path, "rb").read())
-        except ValueError:
-            raise CuckooReportError(
-                "Unable to read valid JSON from the ElasticSearch "
-                "template JSON file located at: %s" % template_path
-            )
-
-        # Create an index wildcard based off of the index name specified
-        # in the config file, this overwrites the settings in
-        # template.json.
-        template["template"] = elastic.index + "-*"
-
-        # if the template does not already exist then create it
-        if not elastic.client.indices.exists_template(cls.template_name):
-            try:
-                elastic.client.indices.put_template(name=cls.template_name, body=ujson.dumps(template))
-            except Exception as e:
-                elastic.client.indices.put_template(name=cls.template_name, body=json.dumps(template))
-        return True
 
     def get_base_document(self):
         # Gets precached report time and the task_id.
@@ -153,10 +83,64 @@ class ElasticSearch(Report):
             )
 
     def process_info(self, report):
-        value = flatten_dict(report)
-        meta = value["test"]
+        value = flatten_dictionary(report)
+        meta = value["report"]
         return meta
 
+    def process_signatures(self, signatures):
+        new_signatures = []
+
+        for signature in signatures:
+            new_signature = signature.copy()
+
+            if "marks" in signature:
+                new_signature["marks"] = []
+                for mark in signature["marks"]:
+                    new_mark = {}
+                    for k, v in mark.iteritems():
+                        if k != "call" and type(v) == dict:
+                            # If marks is a dictionary we need to explicitly define it for the ES mapping
+                            # this is in the case that a key in marks is sometimes a string and sometimes a dictionary
+                            # if the first document indexed into ES is a string it will not accept a signature
+                            # and through a ES mapping exception.  To counter this dicts will be explicitly stated
+                            # in the key except for calls which are always dictionaries.
+                            # This presented itself in dictionary_dataing with signatures.marks.section which would sometimes be a
+                            # PE section string such as "UPX"  and other times full details about the section as a
+                            # dictionary in the case of packer_upx and packer_entropy signatures
+                            new_mark["%s_dict" % k] = v
+                        else:
+                            # If it is not a mark it is fine to leave key as is
+                            new_mark[k] = v
+
+                    new_signature["marks"].append(new_mark)
+
+            new_signatures.append(new_signature)
+
+        return new_signatures
+
+    def process_behavior(self, results, bulk_submit_size=1000):
+        """Index the behavioral data."""
+        for process in results.get("behavior", {}).get("processes", []):
+            bulk_index = []
+
+            for call in process["calls"]:
+                base_document = self.get_base_document()
+                call_document = {
+                    "pid": process["pid"],
+                }
+                call_document.update(call)
+                call_document.update(base_document)
+                bulk_index.append({
+                    "_index": "cuckoo-api",
+                    "_type": self.call_type,
+                    "_source": call_document
+                })
+                if len(bulk_index) == bulk_submit_size:
+                    self.do_bulk_index(bulk_index)
+                    bulk_index = []
+
+            if len(bulk_index) > 0:
+                self.do_bulk_index(bulk_index)
 
     def run(self, results):
         """Index the Cuckoo report into ElasticSearch.
@@ -173,6 +157,7 @@ class ElasticSearch(Report):
             "monthly": "%Y-%m",
             "daily": "%Y-%m-%d",
         }[elastic.index_time_pattern])
+
         self.dated_index = "%s-%s" % (elastic.index, date_index)
 
         # Index target information, the behavioral summary, and
@@ -182,7 +167,20 @@ class ElasticSearch(Report):
 
         doc = self.process_info(results)
         doc["cuckoo_node"] = elastic.cuckoo_node
+        signatures = results.get("signatures")
+        if signatures:
+            doc["signatures"] = self.process_signatures(signatures)
+
+        dropped = results.get("dropped")
+        if dropped:
+            doc["dropped"] = dropped
+
+        procmemory = results.get("procmemory")
+        if procmemory:
+            doc["procmemory"] = procmemory
 
         self.do_index(doc)
 
         # Index the API calls.
+        if elastic.calls:
+            self.process_behavior(results)

@@ -10,6 +10,7 @@ from lib.common.exceptions import CuckooError
 
 log = logging.getLogger(__name__)
 
+
 class DumpTLSMasterSecrets(Auxiliary):
     """Dump TLS master secrets as used by various Windows libraries."""
     def start(self):

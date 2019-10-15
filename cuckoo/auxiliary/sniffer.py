@@ -14,6 +14,7 @@ from cuckoo.misc import cwd, getuser, Popen
 
 log = logging.getLogger(__name__)
 
+
 class Sniffer(Auxiliary):
     def __init__(self):
         Auxiliary.__init__(self)

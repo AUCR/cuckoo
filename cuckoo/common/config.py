@@ -789,6 +789,9 @@ class Config(object):
                 "url": String(),
                 "identifier": String(),
             },
+            "objectstorage": {
+                "enabled": Boolean(False)
+            },
             "mattermost": {
                 "enabled": Boolean(False),
                 "username": String("cuckoo"),

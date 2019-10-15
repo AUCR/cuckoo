@@ -194,7 +194,7 @@ do_setup(
         "django_extensions==1.6.7",
         "dpkt==1.8.7",
         "egghatch>=0.2.3, <0.3",
-        "elasticsearch==5.3.0",
+        "elasticsearch",
         "flask==0.12.2",
         "flask-sqlalchemy==2.1",
         "httpreplay>=0.2.4, <0.3",
@@ -216,6 +216,7 @@ do_setup(
         "unicorn==1.0.1",
         "wakeonlan==0.2.2",
         "yara-python==3.6.3",
+        "ujson"
     ],
     extras_require={
         ":sys_platform == 'win32'": [

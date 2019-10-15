@@ -19,7 +19,7 @@ import sys
 import threading
 import warnings
 import xmlrpclib
-
+import pkg_resources
 from distutils.version import StrictVersion
 
 from cuckoo.common.constants import GITHUB_URL, ISSUES_PAGE_URL
@@ -262,7 +262,7 @@ def exception_message():
 
     msg += "Modules: %s\n\n" % " ".join(sorted(
         "%s:%s" % (package.key, package.version)
-        for package in pip.get_installed_distributions()
+        for package in pkg_resources.working_set
     ))
     return msg
 
